@@ -2,7 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Hermes.Agent.Core;
@@ -19,7 +24,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Windows.ApplicationModel.Resources;
+using NAudio.Wave;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Media.Core;
 
 namespace HermesDesktop.Views;
 
@@ -47,6 +54,10 @@ public sealed partial class ChatPage : Page
 
     private bool _initialized;
     private bool _isBusy;
+    private bool _isRecordingVoice;
+    private WaveInEvent? _voiceRecorder;
+    private WaveFileWriter? _voiceWriter;
+    private string? _voiceRecordingPath;
     private OnboardingState _onboarding = OnboardingState.None;
 
     public ChatPage()
@@ -400,6 +411,7 @@ public sealed partial class ChatPage : Page
             if (assistantItem is not null)
             {
                 assistantItem.IsStreaming = false;
+                await SpeakReplyIfEnabledAsync(assistantItem.Content);
             }
 
             if (!hasContent)
@@ -516,6 +528,189 @@ public sealed partial class ChatPage : Page
     private void StopGeneration_Click(object sender, RoutedEventArgs e)
     {
         _chatService.CancelStream();
+    }
+
+    // ── Local Voice ──
+
+    private async void VoiceButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy && !_isRecordingVoice) return;
+
+        try
+        {
+            if (_isRecordingVoice)
+            {
+                StopVoiceRecording();
+                return;
+            }
+
+            StartVoiceRecording();
+        }
+        catch (Exception ex)
+        {
+            ResetVoiceUi();
+            AppendSystemMessage($"Voice error: {ex.Message}");
+            await Task.CompletedTask;
+        }
+    }
+
+    private void StartVoiceRecording()
+    {
+        var voiceDir = Path.Combine(HermesEnvironment.HermesHomePath, "voice");
+        Directory.CreateDirectory(voiceDir);
+        _voiceRecordingPath = Path.Combine(voiceDir, $"desktop_recording_{DateTime.UtcNow:yyyyMMdd_HHmmss}.wav");
+
+        _voiceRecorder = new WaveInEvent
+        {
+            WaveFormat = new WaveFormat(16000, 16, 1),
+            BufferMilliseconds = 100
+        };
+        _voiceWriter = new WaveFileWriter(_voiceRecordingPath, _voiceRecorder.WaveFormat);
+
+        _voiceRecorder.DataAvailable += (_, args) =>
+        {
+            _voiceWriter?.Write(args.Buffer, 0, args.BytesRecorded);
+            _voiceWriter?.Flush();
+        };
+        _voiceRecorder.RecordingStopped += async (_, args) =>
+        {
+            var path = _voiceRecordingPath;
+            _voiceWriter?.Dispose();
+            _voiceWriter = null;
+            _voiceRecorder?.Dispose();
+            _voiceRecorder = null;
+
+            if (args.Exception is not null)
+            {
+                ResetVoiceUi();
+                AppendSystemMessage($"Voice recording failed: {args.Exception.Message}");
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(path))
+                await TranscribeRecordingIntoPromptAsync(path);
+        };
+
+        _voiceRecorder.StartRecording();
+        _isRecordingVoice = true;
+        VoiceButton.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 122, 31, 31));
+        ToolTipService.SetToolTip(VoiceButton, "Stop recording and transcribe");
+        ShowThinking(true, "Recording voice...");
+    }
+
+    private void StopVoiceRecording()
+    {
+        if (_voiceRecorder is null) return;
+        VoiceButton.IsEnabled = false;
+        ShowThinking(true, "Stopping and transcribing...");
+        _voiceRecorder.StopRecording();
+    }
+
+    private async Task TranscribeRecordingIntoPromptAsync(string audioPath)
+    {
+        try
+        {
+            var sttUrl = ReadVoiceSetting("stt_url", "http://127.0.0.1:8001/v1/audio/transcriptions");
+            using var http = CreateVoiceHttpClient();
+            using var form = new MultipartFormDataContent();
+            await using var stream = File.OpenRead(audioPath);
+            using var audio = new StreamContent(stream);
+            audio.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+            form.Add(audio, "file", Path.GetFileName(audioPath));
+            form.Add(new StringContent(ReadVoiceSetting("stt_model", "Systran/faster-whisper-large-v3")), "model");
+
+            var response = await http.PostAsync(sttUrl, form);
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException($"{response.StatusCode}: {body}");
+
+            var transcript = ExtractTranscriptText(body);
+            PromptTextBox.Text = transcript;
+            PromptTextBox.Focus(FocusState.Programmatic);
+            PromptTextBox.SelectionStart = PromptTextBox.Text.Length;
+            AppendSystemMessage($"Voice transcript ready:\n\n{transcript}");
+        }
+        catch (Exception ex)
+        {
+            AppendSystemMessage($"STT error: {ex.Message}");
+        }
+        finally
+        {
+            ResetVoiceUi();
+            ShowThinking(false);
+        }
+    }
+
+    private async Task SpeakReplyIfEnabledAsync(string text)
+    {
+        if (SpeakRepliesCheckBox.IsChecked != true || string.IsNullOrWhiteSpace(text))
+            return;
+
+        try
+        {
+            ShowThinking(true, "Generating voice reply...");
+            var ttsUrl = ReadVoiceSetting("tts_url", "http://127.0.0.1:8880/v1/audio/speech");
+            var voice = ReadVoiceSetting("voice", "af_nova");
+            var payload = JsonSerializer.Serialize(new { input = text, voice });
+            using var http = CreateVoiceHttpClient();
+            using var response = await http.PostAsync(
+                ttsUrl,
+                new StringContent(payload, Encoding.UTF8, "application/json"));
+            var body = await response.Content.ReadAsByteArrayAsync();
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException($"{response.StatusCode}: {Encoding.UTF8.GetString(body)}");
+
+            var voiceDir = Path.Combine(HermesEnvironment.HermesHomePath, "voice");
+            Directory.CreateDirectory(voiceDir);
+            var audioPath = Path.Combine(voiceDir, $"reply_{DateTime.UtcNow:yyyyMMdd_HHmmss}.wav");
+            await File.WriteAllBytesAsync(audioPath, body);
+
+            VoiceAudioPlayer.Source = MediaSource.CreateFromUri(new Uri(audioPath));
+            VoiceAudioPlayer.MediaPlayer.Play();
+        }
+        catch (Exception ex)
+        {
+            AppendSystemMessage($"TTS error: {ex.Message}");
+        }
+        finally
+        {
+            ShowThinking(false);
+        }
+    }
+
+    private void ResetVoiceUi()
+    {
+        _isRecordingVoice = false;
+        VoiceButton.IsEnabled = true;
+        VoiceButton.ClearValue(Button.BackgroundProperty);
+        ToolTipService.SetToolTip(VoiceButton, "Record voice with local Whisper");
+    }
+
+    private static HttpClient CreateVoiceHttpClient() => new()
+    {
+        Timeout = TimeSpan.FromMinutes(3)
+    };
+
+    private static string ReadVoiceSetting(string key, string fallback)
+    {
+        var value = HermesEnvironment.ReadConfigSetting("voice", key);
+        return string.IsNullOrWhiteSpace(value) ? fallback : value;
+    }
+
+    private static string ExtractTranscriptText(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("text", out var text))
+                return text.GetString() ?? "";
+        }
+        catch (JsonException)
+        {
+            // Some local services can return plain text under error/debug modes.
+        }
+
+        return json.Trim();
     }
 
     // ── New Chat ──

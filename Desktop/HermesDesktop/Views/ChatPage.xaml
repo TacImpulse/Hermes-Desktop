@@ -13,7 +13,8 @@
     mc:Ignorable="d">
     <!-- Enter sends, Shift+Enter for newline (handled in KeyDown) -->
 
-    <Grid x:Name="MainGrid" Padding="20,12,24,20" ColumnSpacing="14" RowSpacing="14">
+    <Grid x:Name="MainGrid" Padding="20,12,24,20" ColumnSpacing="14" RowSpacing="14"
+          HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" MinWidth="300"/>
             <ColumnDefinition Width="Auto"/>
@@ -59,7 +60,7 @@
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="models:ChatMessageItem">
                             <Grid Margin="0,0,0,10">
-                                <Border MaxWidth="780" HorizontalAlignment="{x:Bind BubbleAlignment}"
+                                <Border MaxWidth="1200" HorizontalAlignment="{x:Bind BubbleAlignment}"
                                     Background="{x:Bind BubbleBackground}" BorderBrush="{x:Bind BubbleBorderBrush}"
                                     BorderThickness="1" CornerRadius="12" Padding="16,12">
                                     <StackPanel Spacing="8">
@@ -104,9 +105,9 @@
                         </StackPanel>
                         <Button x:Name="StopButton" x:Uid="ChatStopButton" Click="StopGeneration_Click"
                                 HorizontalAlignment="Right" VerticalAlignment="Center"
-                                Background="{StaticResource AppInsetBrush}" Foreground="White"
-                                BorderBrush="{StaticResource AppSubtleStrokeBrush}"
-                                Padding="12,4" FontSize="12" CornerRadius="6"/>
+                                Background="#7A1F1F" Foreground="White"
+                                BorderBrush="#FFB4B4"
+                                Padding="14,5" FontSize="12" FontWeight="SemiBold" CornerRadius="6"/>
                     </Grid>
                 </Border>
 
@@ -119,6 +120,7 @@
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
@@ -133,7 +135,17 @@
                                      KeyDown="PromptTextBox_KeyDown"
                                      TextChanged="PromptTextBox_TextChanged" />
 
-                            <Button x:Name="SendButton" x:Uid="ChatPageSendButton" Grid.Column="1"
+                            <Button x:Name="VoiceButton" Grid.Column="1"
+                                    Click="VoiceButton_Click"
+                                    VerticalAlignment="Bottom"
+                                    Background="Transparent" BorderBrush="{StaticResource AppSubtleStrokeBrush}"
+                                    Padding="8" CornerRadius="8"
+                                    ToolTipService.ToolTip="Record voice with local Whisper">
+                                <FontIcon Glyph="&#xE720;" FontSize="18"
+                                          Foreground="{StaticResource AppAccentBrush}" />
+                            </Button>
+
+                            <Button x:Name="SendButton" x:Uid="ChatPageSendButton" Grid.Column="2"
                                     Click="SendPrompt_Click"
                                     VerticalAlignment="Bottom"
                                     Background="Transparent" BorderThickness="0"
@@ -148,6 +160,7 @@
                     <!-- Model switcher + Permission mode + disclaimer -->
                     <Grid>
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
@@ -168,10 +181,16 @@
                                              FontSize="11" Padding="0"
                                              Click="PermissionModeToggle_Click" />
                         </StackPanel>
-                        <TextBlock Grid.Column="2" x:Uid="ChatPageDisclaimer"
+                        <CheckBox x:Name="SpeakRepliesCheckBox" Grid.Column="2"
+                                  Content="Speak replies" IsChecked="True"
+                                  FontSize="11" Foreground="{StaticResource AppTextSecondaryBrush}"
+                                  Opacity="0.75" Margin="12,0,0,0"
+                                  VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="3" x:Uid="ChatPageDisclaimer"
                                    FontSize="10" Foreground="{StaticResource AppTextSecondaryBrush}"
                                    Opacity="0.4" HorizontalAlignment="Right" VerticalAlignment="Center" />
                     </Grid>
+                    <MediaPlayerElement x:Name="VoiceAudioPlayer" Visibility="Collapsed" AutoPlay="False" />
                 </StackPanel>
             </Grid>
         </Border>
