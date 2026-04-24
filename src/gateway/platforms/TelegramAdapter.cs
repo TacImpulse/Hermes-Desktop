@@ -39,6 +39,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
     public bool IsConnected { get; private set; }
 
     private string ApiUrl(string method) => $"https://api.telegram.org/bot{_token}/{method}";
+    private string FileUrl(string filePath) => $"https://api.telegram.org/file/bot{_token}/{filePath}";
 
     public async Task<bool> ConnectAsync(CancellationToken ct)
     {
@@ -151,9 +152,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
                     _lastUpdateId = update.GetProperty("update_id").GetInt64();
 
                     if (!update.TryGetProperty("message", out var msg)) continue;
-                    if (!msg.TryGetProperty("text", out var textEl)) continue;
 
-                    var text = textEl.GetString() ?? "";
                     var chat = msg.GetProperty("chat");
                     var chatId = chat.GetProperty("id").GetInt64().ToString();
                     var chatType = chat.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : "private";
@@ -163,10 +162,25 @@ public sealed class TelegramAdapter : IPlatformAdapter
                     var username = from.ValueKind == JsonValueKind.Object && from.TryGetProperty("username", out var unEl)
                         ? unEl.GetString() : null;
 
+                    var mediaUrls = new List<string>();
+                    var mediaTypes = new List<string>();
+                    var text = ExtractMessageText(msg, ct, mediaUrls, mediaTypes);
+                    if (string.IsNullOrWhiteSpace(text))
+                        text = mediaUrls.Count > 0 ? $"[{mediaTypes.FirstOrDefault() ?? "media"}]" : "";
+
                     var evt = new MessageEvent
                     {
                         Text = text,
-                        Type = text.StartsWith('/') ? MessageType.Command : MessageType.Text,
+                        Type = mediaTypes.Count > 0
+                            ? mediaTypes[0] switch
+                            {
+                                "photo" => MessageType.Image,
+                                "voice" or "audio" => MessageType.Audio,
+                                "document" => MessageType.Document,
+                                "video" => MessageType.Video,
+                                _ => MessageType.Text
+                            }
+                            : (text.StartsWith('/') ? MessageType.Command : MessageType.Text),
                         Source = new SessionSource
                         {
                             Platform = Platform.Telegram,
@@ -176,6 +190,8 @@ public sealed class TelegramAdapter : IPlatformAdapter
                             IsGroup = chatType is "group" or "supergroup",
                             IsDm = chatType == "private"
                         },
+                        MediaUrls = mediaUrls,
+                        MediaTypes = mediaTypes,
                         MessageId = msg.TryGetProperty("message_id", out var midEl) ? midEl.GetInt64().ToString() : null
                     };
 
@@ -224,5 +240,120 @@ public sealed class TelegramAdapter : IPlatformAdapter
             remaining = remaining[len..];
         }
         return chunks;
+    }
+
+    private string ExtractMessageText(
+        JsonElement msg,
+        CancellationToken ct,
+        List<string> mediaUrls,
+        List<string> mediaTypes)
+    {
+        if (msg.TryGetProperty("text", out var textEl))
+            return textEl.GetString() ?? "";
+
+        if (msg.TryGetProperty("caption", out var captionEl))
+            return captionEl.GetString() ?? "";
+
+        if (msg.TryGetProperty("photo", out var photoEl) &&
+            photoEl.ValueKind == JsonValueKind.Array &&
+            photoEl.GetArrayLength() > 0)
+        {
+            var photo = photoEl.EnumerateArray().Last();
+            if (photo.TryGetProperty("file_id", out var fileIdEl))
+            {
+                var url = GetTelegramFileUrl(fileIdEl.GetString(), ct);
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    mediaUrls.Add(url);
+                    mediaTypes.Add("photo");
+                }
+            }
+            return msg.TryGetProperty("caption", out var captionFromPhoto) ? captionFromPhoto.GetString() ?? "" : "";
+        }
+
+        if (msg.TryGetProperty("voice", out var voiceEl) && voiceEl.ValueKind == JsonValueKind.Object)
+        {
+            if (voiceEl.TryGetProperty("file_id", out var fileIdEl))
+            {
+                var url = GetTelegramFileUrl(fileIdEl.GetString(), ct);
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    mediaUrls.Add(url);
+                    mediaTypes.Add("voice");
+                }
+            }
+            return "";
+        }
+
+        if (msg.TryGetProperty("audio", out var audioEl) && audioEl.ValueKind == JsonValueKind.Object)
+        {
+            if (audioEl.TryGetProperty("file_id", out var fileIdEl))
+            {
+                var url = GetTelegramFileUrl(fileIdEl.GetString(), ct);
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    mediaUrls.Add(url);
+                    mediaTypes.Add("audio");
+                }
+            }
+            return "";
+        }
+
+        if (msg.TryGetProperty("document", out var documentEl) && documentEl.ValueKind == JsonValueKind.Object)
+        {
+            if (documentEl.TryGetProperty("file_id", out var fileIdEl))
+            {
+                var url = GetTelegramFileUrl(fileIdEl.GetString(), ct);
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    mediaUrls.Add(url);
+                    mediaTypes.Add("document");
+                }
+            }
+            return "";
+        }
+
+        if (msg.TryGetProperty("video", out var videoEl) && videoEl.ValueKind == JsonValueKind.Object)
+        {
+            if (videoEl.TryGetProperty("file_id", out var fileIdEl))
+            {
+                var url = GetTelegramFileUrl(fileIdEl.GetString(), ct);
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    mediaUrls.Add(url);
+                    mediaTypes.Add("video");
+                }
+            }
+            return "";
+        }
+
+        return "";
+    }
+
+    private string? GetTelegramFileUrl(string? fileId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(fileId))
+            return null;
+
+        try
+        {
+            var response = _http.GetAsync(ApiUrl($"getFile?file_id={Uri.EscapeDataString(fileId)}"), ct)
+                .GetAwaiter().GetResult();
+            var json = response.Content.ReadAsStringAsync(ct).GetAwaiter().GetResult();
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.GetProperty("ok").GetBoolean())
+                return null;
+
+            var result = doc.RootElement.GetProperty("result");
+            if (!result.TryGetProperty("file_path", out var pathEl))
+                return null;
+
+            var filePath = pathEl.GetString();
+            return string.IsNullOrWhiteSpace(filePath) ? null : FileUrl(filePath);
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
