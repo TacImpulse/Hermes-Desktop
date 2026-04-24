@@ -92,17 +92,16 @@ public sealed class TelegramAdapter : IPlatformAdapter
 
                 var response = await _http.PostAsJsonAsync(ApiUrl("sendMessage"), payload, ct);
                 var json = await response.Content.ReadAsStringAsync(ct);
-                using var doc = JsonDocument.Parse(json);
-
-                if (doc.RootElement.GetProperty("ok").GetBoolean())
+                if (TryParseTelegramOk(json, out var doc, out var desc))
                 {
                     lastMessageId = doc.RootElement.GetProperty("result")
                         .GetProperty("message_id").GetInt64().ToString();
                 }
                 else
                 {
-                    var desc = doc.RootElement.TryGetProperty("description", out var d) ? d.GetString() : "Unknown error";
-                    return DeliveryResult.Fail($"Telegram API error: {desc}");
+                    var status = (int)response.StatusCode;
+                    var reason = string.IsNullOrWhiteSpace(desc) ? response.ReasonPhrase ?? "Unknown error" : desc;
+                    return DeliveryResult.Fail($"Telegram API error ({status}): {reason}");
                 }
             }
 
@@ -232,12 +231,28 @@ public sealed class TelegramAdapter : IPlatformAdapter
                 action
             };
 
-            await _http.PostAsJsonAsync(ApiUrl("sendChatAction"), payload, ct);
+            var response = await _http.PostAsJsonAsync(ApiUrl("sendChatAction"), payload, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync(ct);
+                if (TryParseTelegramOk(json, out _, out var desc))
+                    _logger.LogDebug("Telegram chat action returned non-success without details for {ChatId}", chatId);
+                else
+                    _logger.LogDebug("Telegram chat action failed for {ChatId}: {Error}", chatId, desc ?? response.ReasonPhrase);
+            }
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Telegram chat action failed for {ChatId}", chatId);
         }
+    }
+
+    private static bool TryParseTelegramOk(string json, out JsonDocument doc, out string? description)
+    {
+        doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        description = root.TryGetProperty("description", out var descEl) ? descEl.GetString() : null;
+        return root.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
     }
 
     private static List<string> ChunkText(string text, int maxLength)
