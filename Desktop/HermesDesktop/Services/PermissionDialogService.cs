@@ -28,7 +28,8 @@ public enum PermissionPromptDecision
 /// <list type="number">
 ///   <item>Marshal to the UI thread via the owning window's DispatcherQueue.</item>
 ///   <item>Format the raw tool arguments for human review (bash command
-///         extraction + JSON pretty-print fallback).</item>
+///         extraction, Telegram send-message summaries, JSON pretty-print
+///         fallback).</item>
 ///   <item>Build the ContentDialog body with a selectable monospace command
 ///         block so technical users can audit (and Ctrl-C) what the agent
 ///         is about to run before approving.</item>
@@ -82,8 +83,10 @@ public sealed class PermissionDialogService
     /// The raw JSON arguments string from the model's tool call. For the
     /// bash tool that is <c>{"command":"whoami"}</c>; the Command section
     /// of the dialog will surface the literal <c>whoami</c> instead of the
-    /// JSON wrapper. May be null/empty if the host doesn't have it, in
-    /// which case the Command section is omitted entirely.
+    /// JSON wrapper. For Telegram send-message calls, the dialog summarizes
+    /// the destination and message text. May be null/empty if the host
+    /// doesn't have it, in which case the Command section is omitted
+    /// entirely.
     /// </param>
     public Task<PermissionPromptDecision> ShowPermissionDecisionAsync(
         string message,
@@ -210,9 +213,10 @@ public sealed class PermissionDialogService
     /// Format raw tool arguments for display in the permission dialog. For
     /// the bash tool, parse the JSON and surface the literal command string
     /// so the user sees <c>whoami</c> rather than <c>{"command":"whoami"}</c>.
-    /// For other tools, pretty-print the JSON. Returns an empty string when
-    /// there is nothing useful to display so the caller can omit the Command
-    /// section entirely.
+    /// For Telegram send-message calls, surface the destination and message
+    /// text in a concise human-readable form. For other tools, pretty-print
+    /// the JSON. Returns an empty string when there is nothing useful to
+    /// display so the caller can omit the Command section entirely.
     /// </summary>
     /// <remarks>
     /// Internal so it can be unit-tested. Static so it has no instance state
@@ -236,6 +240,36 @@ public sealed class PermissionDialogService
                 commandProp.ValueKind == JsonValueKind.String)
             {
                 return commandProp.GetString() ?? string.Empty;
+            }
+
+            if (string.Equals(toolName, "send_message", StringComparison.OrdinalIgnoreCase) &&
+                root.ValueKind == JsonValueKind.Object)
+            {
+                var summary = new System.Text.StringBuilder();
+
+                if (root.TryGetProperty("chatId", out var chatIdProp) &&
+                    chatIdProp.ValueKind == JsonValueKind.String)
+                {
+                    summary.AppendLine($"Chat: {chatIdProp.GetString()}");
+                }
+
+                if (root.TryGetProperty("text", out var textProp) &&
+                    textProp.ValueKind == JsonValueKind.String)
+                {
+                    summary.AppendLine("Message:");
+                    summary.AppendLine(textProp.GetString());
+                }
+
+                if (root.TryGetProperty("replyToMessageId", out var replyProp) &&
+                    replyProp.ValueKind != JsonValueKind.Null &&
+                    replyProp.ValueKind != JsonValueKind.Undefined)
+                {
+                    summary.AppendLine($"Reply To: {replyProp}");
+                }
+
+                var formatted = summary.ToString().Trim();
+                if (!string.IsNullOrEmpty(formatted))
+                    return formatted;
             }
 
             // Everything else: pretty-print the JSON for readability.
