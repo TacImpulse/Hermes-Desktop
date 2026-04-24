@@ -197,6 +197,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
 
                     if (_messageHandler is not null)
                     {
+                        await SendChatActionAsync(chatId, "typing", ct);
                         var reply = await _messageHandler(evt);
                         if (!string.IsNullOrWhiteSpace(reply))
                         {
@@ -218,6 +219,24 @@ public sealed class TelegramAdapter : IPlatformAdapter
                 _errorHandler?.Invoke(Platform.Telegram, ex);
                 await Task.Delay(5000, ct); // Brief pause before retrying
             }
+        }
+    }
+
+    private async Task SendChatActionAsync(string chatId, string action, CancellationToken ct)
+    {
+        try
+        {
+            var payload = new
+            {
+                chat_id = chatId,
+                action
+            };
+
+            await _http.PostAsJsonAsync(ApiUrl("sendChatAction"), payload, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Telegram chat action failed for {ChatId}", chatId);
         }
     }
 

@@ -156,7 +156,8 @@ public sealed class GatewayService
         _activeAgents[sessionKey] = DateTime.UtcNow;
         try
         {
-            var response = await _agentHandler(sessionKey, evt.Text, evt.Source.Platform.ToString());
+            var routedMessage = BuildAgentMessage(evt);
+            var response = await _agentHandler(sessionKey, routedMessage, evt.Source.Platform.ToString());
             return response;
         }
         catch (Exception ex)
@@ -293,6 +294,21 @@ public sealed class GatewayService
         if (_config.GroupSessionsPerUser && source.IsGroup)
             key += $":{source.UserId}";
         return key;
+    }
+
+    private static string BuildAgentMessage(MessageEvent evt)
+    {
+        if (evt.MediaUrls.Count == 0)
+            return evt.Text;
+
+        var mediaSummary = string.Join(", ", evt.MediaUrls.Select((url, index) =>
+        {
+            var type = index < evt.MediaTypes.Count ? evt.MediaTypes[index] : "media";
+            return $"{type}: {url}";
+        }));
+
+        var baseText = string.IsNullOrWhiteSpace(evt.Text) ? "(no text)" : evt.Text;
+        return $"{baseText}\n\n[Telegram attachments]\n{mediaSummary}";
     }
 
     // ══════════════════════════════════════════
