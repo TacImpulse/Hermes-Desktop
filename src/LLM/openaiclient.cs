@@ -203,6 +203,11 @@ public sealed class OpenAiClient : IChatClient
             return (object)new { role = m.Role, content = m.Content };
         }).ToArray();
 
+        var shouldDisableThinking =
+            (_config.Provider?.Equals("local", StringComparison.OrdinalIgnoreCase) == true ||
+             (_config.BaseUrl?.Contains("127.0.0.1") == true)) &&
+            (_config.Model?.Contains("qwen", StringComparison.OrdinalIgnoreCase) == true);
+
         if (tools is not null)
         {
             return new
@@ -211,8 +216,10 @@ public sealed class OpenAiClient : IChatClient
                 messages = msgs,
                 tools,
                 tool_choice = "auto",
-                temperature = 0.7,
-                stream
+                temperature = _config.Temperature,
+                max_tokens = _config.MaxTokens > 0 ? (int?)_config.MaxTokens : null,
+                stream,
+                chat_template_kwargs = shouldDisableThinking ? new { enable_thinking = false } : null
             };
         }
 
@@ -220,8 +227,10 @@ public sealed class OpenAiClient : IChatClient
         {
             model = _config.Model,
             messages = msgs,
-            temperature = 0.7,
-            stream
+            temperature = _config.Temperature,
+            max_tokens = _config.MaxTokens > 0 ? (int?)_config.MaxTokens : null,
+            stream,
+            chat_template_kwargs = shouldDisableThinking ? new { enable_thinking = false } : null
         };
     }
 
