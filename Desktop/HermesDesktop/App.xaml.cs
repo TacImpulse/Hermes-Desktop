@@ -232,6 +232,10 @@ public partial class App : Application
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
         var workspace = HermesEnvironment.AgentWorkingDirectory;
+        var telegramConfigured = HermesEnvironment.TelegramConfigured;
+        var telegramGatewayNote = telegramConfigured
+            ? "Telegram is already wired through the native C# gateway. Use the existing runtime link; do not ask for BotFather unless the user is explicitly creating a brand-new bot."
+            : "Telegram is not yet configured. If the user asks to set it up, then BotFather may be needed to create a bot token.";
 
         return $"""
             {SystemPrompts.Default}
@@ -242,6 +246,7 @@ public partial class App : Application
             - Desktop path: {desktop}
             - Current workspace: {workspace}
             - When the user asks for their Desktop, use the Desktop path above. Do not infer the Windows username from the user's display name.
+            - Telegram runtime note: {telegramGatewayNote}
             """;
     }
 

@@ -142,7 +142,7 @@
                             Style="{StaticResource MetricValueTextStyle}" />
                         <TextBlock x:Name="TelegramMaskedText" FontSize="13"
                             Foreground="{StaticResource AppTextSecondaryBrush}" />
-                        <TextBlock Text="Get a token from @BotFather on Telegram. Env var: TELEGRAM_BOT_TOKEN"
+                        <TextBlock Text="If you are creating a brand-new Telegram bot, get a token from @BotFather. If Hermes is already connected, you can ignore this and use the native gateway."
                                    FontSize="12" TextWrapping="Wrap"
                                    Foreground="{StaticResource AppTextSecondaryBrush}" />
                         <StackPanel Spacing="4">
