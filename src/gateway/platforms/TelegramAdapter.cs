@@ -86,8 +86,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
                 {
                     chat_id = message.ChatId,
                     text = chunk,
-                    reply_to_message_id = message.ReplyToMessageId,
-                    parse_mode = "Markdown"
+                    reply_to_message_id = message.ReplyToMessageId
                 };
 
                 var response = await _http.PostAsJsonAsync(ApiUrl("sendMessage"), payload, ct);
