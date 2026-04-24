@@ -39,6 +39,9 @@ public sealed class Agent : IAgent
     /// <summary>Safety limit to prevent infinite tool loops.</summary>
     public int MaxToolIterations { get; set; } = 25;
 
+    /// <summary>How many times the exact same tool batch may repeat before we stop the loop.</summary>
+    public int MaxRepeatedToolBatchIterations { get; set; } = 3;
+
     /// <summary>Max concurrent workers for parallel tool execution.</summary>
     private const int MaxParallelWorkers = 8;
 
@@ -245,6 +248,8 @@ public sealed class Agent : IAgent
 
         var toolDefs = GetToolDefinitions();
         var iterations = 0;
+        string? lastToolBatchSignature = null;
+        var repeatedToolBatchCount = 0;
 
         while (iterations < MaxToolIterations)
         {
@@ -281,6 +286,33 @@ public sealed class Agent : IAgent
 
             // Normalize tool-call IDs for deterministic referencing across providers
             var normalizedToolCalls = NormalizeToolCallIds(response.ToolCalls!, iterations);
+            var toolBatchSignature = CreateToolBatchSignature(normalizedToolCalls);
+            if (string.Equals(toolBatchSignature, lastToolBatchSignature, StringComparison.Ordinal))
+            {
+                repeatedToolBatchCount++;
+            }
+            else
+            {
+                lastToolBatchSignature = toolBatchSignature;
+                repeatedToolBatchCount = 1;
+            }
+
+            if (repeatedToolBatchCount >= MaxRepeatedToolBatchIterations)
+            {
+                _logger.LogWarning(
+                    "Stopping repeated tool loop after {RepeatCount} identical batches in session {SessionId}: {Signature}",
+                    repeatedToolBatchCount,
+                    session.Id,
+                    toolBatchSignature);
+
+                var repeatedLoopMessage =
+                    "I kept reaching for the same tool calls without making progress, so I stopped the loop. " +
+                    "Please narrow the task or approve a more specific command, and I'll continue from there.";
+                await AgentSessionWriter.AppendAssistantMessageAsync(session, repeatedLoopMessage, _transcripts, ct);
+                if (_contextManager is not null)
+                    await _contextManager.UpdateAfterResponseAsync(session.Id, ct: ct);
+                return repeatedLoopMessage;
+            }
 
             // Record the assistant message with its tool call requests
             await AgentSessionWriter.AppendAssistantToolRequestMessageAsync(
@@ -612,6 +644,8 @@ public sealed class Agent : IAgent
         // ── Tool-calling loop ──
         var toolDefs = GetToolDefinitions();
         var iterations = 0;
+        string? lastStreamToolBatchSignature = null;
+        var repeatedStreamToolBatchCount = 0;
 
         while (iterations < MaxToolIterations)
         {
@@ -641,6 +675,37 @@ public sealed class Agent : IAgent
 
             // Normalize tool-call IDs for deterministic referencing across providers
             var normalizedStreamToolCalls = NormalizeToolCallIds(response.ToolCalls!, iterations);
+            var streamToolBatchSignature = CreateToolBatchSignature(normalizedStreamToolCalls);
+            if (string.Equals(streamToolBatchSignature, lastStreamToolBatchSignature, StringComparison.Ordinal))
+            {
+                repeatedStreamToolBatchCount++;
+            }
+            else
+            {
+                lastStreamToolBatchSignature = streamToolBatchSignature;
+                repeatedStreamToolBatchCount = 1;
+            }
+
+            if (repeatedStreamToolBatchCount >= MaxRepeatedToolBatchIterations)
+            {
+                _logger.LogWarning(
+                    "Stopping repeated streaming tool loop after {RepeatCount} identical batches in session {SessionId}: {Signature}",
+                    repeatedStreamToolBatchCount,
+                    session.Id,
+                    streamToolBatchSignature);
+
+                var repeatedLoopMessage =
+                    "I kept repeating the same tool calls without making progress, so I stopped and need a narrower next step.";
+                yield return new StreamEvent.TokenDelta(repeatedLoopMessage);
+
+                var repeatedLoopMsg = new Message { Role = "assistant", Content = repeatedLoopMessage };
+                session.AddMessage(repeatedLoopMsg);
+                if (_transcripts is not null)
+                    await _transcripts.SaveMessageAsync(session.Id, repeatedLoopMsg, ct);
+                if (_contextManager is not null)
+                    await _contextManager.UpdateAfterResponseAsync(session.Id, ct: ct);
+                yield break;
+            }
 
             // Record assistant message with tool call requests
             var assistantToolMsg = new Message
@@ -828,6 +893,13 @@ public sealed class Agent : IAgent
         session.AddMessage(fallbackMsg);
         if (_transcripts is not null)
             await _transcripts.SaveMessageAsync(session.Id, fallbackMsg, ct);
+    }
+
+    private static string CreateToolBatchSignature(IEnumerable<ToolCall> toolCalls)
+    {
+        return string.Join(
+            "\n",
+            toolCalls.Select(tc => $"{tc.Name}:{tc.Arguments.Trim()}"));
     }
 
     /// <summary>Determine if a batch of tool calls can be safely parallelized.</summary>

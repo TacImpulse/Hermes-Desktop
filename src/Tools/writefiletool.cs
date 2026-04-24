@@ -22,6 +22,8 @@ public sealed class WriteFileTool : ITool
     {
         try
         {
+            var originalFilePath = filePath;
+            filePath = NormalizeKnownUserPath(filePath);
             var exists = File.Exists(filePath);
 
             // Check for stale file content before writing
@@ -66,6 +68,9 @@ public sealed class WriteFileTool : ITool
                 status = "success",
                 action = exists ? "overwrote" : "created",
                 path = filePath,
+                normalized_from = string.Equals(originalFilePath, filePath, StringComparison.OrdinalIgnoreCase)
+                    ? null
+                    : originalFilePath,
                 lines = content.Split('\n').Length,
                 _warning = staleWarning,
                 diff = diff,
@@ -78,6 +83,38 @@ public sealed class WriteFileTool : ITool
         {
             return ToolResult.Fail($"Failed to write file: {ex.Message}", ex);
         }
+    }
+
+    private static string NormalizeKnownUserPath(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return filePath;
+
+        var fullPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(filePath));
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var usersRoot = Directory.GetParent(userProfile)?.FullName;
+        if (string.IsNullOrWhiteSpace(usersRoot))
+            return fullPath;
+
+        var relativeToUsers = Path.GetRelativePath(usersRoot, fullPath);
+        var parts = relativeToUsers.Split(
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+            StringSplitOptions.RemoveEmptyEntries);
+
+        if (parts.Length < 3)
+            return fullPath;
+
+        var requestedProfile = Path.Combine(usersRoot, parts[0]);
+        if (Directory.Exists(requestedProfile))
+            return fullPath;
+
+        if (string.Equals(parts[1], "Desktop", StringComparison.OrdinalIgnoreCase))
+        {
+            var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            return Path.Combine(new[] { desktop }.Concat(parts.Skip(2)).ToArray());
+        }
+
+        return fullPath;
     }
     
     private string GeneratePatch(string filePath, string content)

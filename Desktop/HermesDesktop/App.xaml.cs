@@ -227,6 +227,24 @@ public partial class App : Application
         }
     }
 
+    private static string BuildDesktopSystemPrompt()
+    {
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var workspace = HermesEnvironment.AgentWorkingDirectory;
+
+        return $"""
+            {SystemPrompts.Default}
+
+            # Local Desktop Environment
+
+            - Windows user profile: {userProfile}
+            - Desktop path: {desktop}
+            - Current workspace: {workspace}
+            - When the user asks for their Desktop, use the Desktop path above. Do not infer the Windows username from the user's display name.
+            """;
+    }
+
     /// <summary>
     /// Initializes dependency injection, creates the main window, and activates the application UI.
     /// </summary>
@@ -375,7 +393,10 @@ public partial class App : Application
         services.AddSingleton(sp =>
         {
             var store = sp.GetRequiredService<WorkspacePermissionRuleStore>();
-            var context = new PermissionContext();
+            var context = new PermissionContext
+            {
+                Mode = HermesEnvironment.ExecutionPermissionMode
+            };
             foreach (var rule in store.LoadAlwaysAllowRules())
             {
                 context.AlwaysAllow.Add(rule);
@@ -443,7 +464,7 @@ public partial class App : Application
 
         // Token budget & Prompt builder for Context Runtime
         services.AddSingleton(sp => new TokenBudget(maxTokens: 8000, recentTurnWindow: 6));
-        services.AddSingleton(sp => new PromptBuilder(SystemPrompts.Default));
+        services.AddSingleton(sp => new PromptBuilder(BuildDesktopSystemPrompt()));
 
         // Context manager (with soul integration)
         services.AddSingleton(sp => new ContextManager(

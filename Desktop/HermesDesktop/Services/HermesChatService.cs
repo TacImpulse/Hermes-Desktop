@@ -125,10 +125,11 @@ internal sealed class HermesChatService : IDisposable
                 {
                     case Hermes.Agent.LLM.StreamEvent.TokenDelta td:
                         // Tool-calling status messages (e.g. "[Calling tool: bash]") are
-                        // informational — show in UI but don't accumulate into the saved response
+                        // informational — keep them out of the reasoning panel so the
+                        // visible chat doesn't devolve into a wall of repeated tool markers.
                         if (td.Text.StartsWith("\n[Calling tool:") && td.Text.TrimEnd().EndsWith("]"))
                         {
-                            yield return new ChatStreamEvent(ChatStreamEventType.Thinking, td.Text.Trim());
+                            continue;
                         }
                         else
                         {

@@ -5,6 +5,7 @@ using System.IO;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using Hermes.Agent.Permissions;
 using System.Threading.Tasks;
 
 namespace HermesDesktop.Services;
@@ -735,6 +736,29 @@ internal static class HermesEnvironment
 
     /// <summary>Read a value from the integrations section of config.yaml.</summary>
     internal static string? ReadIntegrationSetting(string key) => ReadConfigSetting("integrations", key);
+
+    internal static PermissionMode ExecutionPermissionMode
+    {
+        get
+        {
+            var raw = ReadConfigSetting("execution", "permission_mode");
+            if (string.IsNullOrWhiteSpace(raw))
+                return PermissionMode.Default;
+
+            return raw.Trim().ToLowerInvariant() switch
+            {
+                "ask" => PermissionMode.Default,
+                "default" => PermissionMode.Default,
+                "plan" => PermissionMode.Plan,
+                "auto" => PermissionMode.Auto,
+                "accept_edits" => PermissionMode.AcceptEdits,
+                "acceptedits" => PermissionMode.AcceptEdits,
+                "bypass" => PermissionMode.BypassPermissions,
+                "bypasspermissions" => PermissionMode.BypassPermissions,
+                _ => PermissionMode.Default
+            };
+        }
+    }
 
     // ── Web search ──
     /// <summary>
