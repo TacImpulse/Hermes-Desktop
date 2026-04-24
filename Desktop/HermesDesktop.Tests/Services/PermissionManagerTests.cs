@@ -87,6 +87,17 @@ public class PermissionManagerTests
     }
 
     [TestMethod]
+    public async Task CheckPermissionsAsync_AlwaysAllowRule_AllowsTelegramSendMessage()
+    {
+        var manager = CreateManager(PermissionMode.Default);
+        manager.AddAlwaysAllowRule("send_message");
+
+        var decision = await manager.CheckPermissionsAsync("send_message", "{\"chatId\":\"123\",\"text\":\"hi\"}", CancellationToken.None);
+
+        Assert.AreEqual(PermissionBehavior.Allow, decision.Behavior);
+    }
+
+    [TestMethod]
     public async Task CheckPermissionsAsync_AlwaysDenyRule_BlocksMatchingTool()
     {
         var manager = CreateManager(PermissionMode.Default, context =>

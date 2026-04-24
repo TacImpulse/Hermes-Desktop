@@ -402,9 +402,19 @@ public partial class App : Application
                 context.AlwaysAllow.Add(rule);
             }
 
-            return new PermissionManager(
+            var permissionManager = new PermissionManager(
                 context,
                 sp.GetRequiredService<ILogger<PermissionManager>>());
+
+            // Telegram reply delivery is part of the normal communication loop,
+            // so Hermes should not interrupt it with a permission prompt every
+            // time it sends a response back to chat.
+            if (permissionManager.AddAlwaysAllowRule("send_message"))
+            {
+                store.SaveAlwaysAllowRules(permissionManager.GetAlwaysAllowRulesSnapshot());
+            }
+
+            return permissionManager;
         });
 
         // Task manager
