@@ -164,7 +164,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
 
                     var mediaUrls = new List<string>();
                     var mediaTypes = new List<string>();
-                    var text = ExtractMessageText(msg, ct, mediaUrls, mediaTypes);
+                    var text = await ExtractMessageTextAsync(msg, ct, mediaUrls, mediaTypes);
                     if (string.IsNullOrWhiteSpace(text))
                         text = mediaUrls.Count > 0 ? $"[{mediaTypes.FirstOrDefault() ?? "media"}]" : "";
 
@@ -242,7 +242,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
         return chunks;
     }
 
-    private string ExtractMessageText(
+    private async Task<string> ExtractMessageTextAsync(
         JsonElement msg,
         CancellationToken ct,
         List<string> mediaUrls,
@@ -261,7 +261,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
             var photo = photoEl.EnumerateArray().Last();
             if (photo.TryGetProperty("file_id", out var fileIdEl))
             {
-                var url = GetTelegramFileUrl(fileIdEl.GetString(), ct);
+                var url = await DownloadTelegramFileAsync(fileIdEl.GetString(), "jpg", ct);
                 if (!string.IsNullOrWhiteSpace(url))
                 {
                     mediaUrls.Add(url);
@@ -275,7 +275,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
         {
             if (voiceEl.TryGetProperty("file_id", out var fileIdEl))
             {
-                var url = GetTelegramFileUrl(fileIdEl.GetString(), ct);
+                var url = await DownloadTelegramFileAsync(fileIdEl.GetString(), "ogg", ct);
                 if (!string.IsNullOrWhiteSpace(url))
                 {
                     mediaUrls.Add(url);
@@ -289,7 +289,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
         {
             if (audioEl.TryGetProperty("file_id", out var fileIdEl))
             {
-                var url = GetTelegramFileUrl(fileIdEl.GetString(), ct);
+                var url = await DownloadTelegramFileAsync(fileIdEl.GetString(), "mp3", ct);
                 if (!string.IsNullOrWhiteSpace(url))
                 {
                     mediaUrls.Add(url);
@@ -303,7 +303,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
         {
             if (documentEl.TryGetProperty("file_id", out var fileIdEl))
             {
-                var url = GetTelegramFileUrl(fileIdEl.GetString(), ct);
+                var url = await DownloadTelegramFileAsync(fileIdEl.GetString(), "bin", ct);
                 if (!string.IsNullOrWhiteSpace(url))
                 {
                     mediaUrls.Add(url);
@@ -317,7 +317,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
         {
             if (videoEl.TryGetProperty("file_id", out var fileIdEl))
             {
-                var url = GetTelegramFileUrl(fileIdEl.GetString(), ct);
+                var url = await DownloadTelegramFileAsync(fileIdEl.GetString(), "mp4", ct);
                 if (!string.IsNullOrWhiteSpace(url))
                 {
                     mediaUrls.Add(url);
@@ -330,16 +330,15 @@ public sealed class TelegramAdapter : IPlatformAdapter
         return "";
     }
 
-    private string? GetTelegramFileUrl(string? fileId, CancellationToken ct)
+    private async Task<string?> DownloadTelegramFileAsync(string? fileId, string extension, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(fileId))
             return null;
 
         try
         {
-            var response = _http.GetAsync(ApiUrl($"getFile?file_id={Uri.EscapeDataString(fileId)}"), ct)
-                .GetAwaiter().GetResult();
-            var json = response.Content.ReadAsStringAsync(ct).GetAwaiter().GetResult();
+            var response = await _http.GetAsync(ApiUrl($"getFile?file_id={Uri.EscapeDataString(fileId)}"), ct);
+            var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
             if (!doc.RootElement.GetProperty("ok").GetBoolean())
                 return null;
@@ -349,7 +348,16 @@ public sealed class TelegramAdapter : IPlatformAdapter
                 return null;
 
             var filePath = pathEl.GetString();
-            return string.IsNullOrWhiteSpace(filePath) ? null : FileUrl(filePath);
+            if (string.IsNullOrWhiteSpace(filePath))
+                return null;
+
+            var fileBytes = await _http.GetByteArrayAsync(FileUrl(filePath), ct);
+            var tempDir = Path.Combine(Path.GetTempPath(), "HermesTelegram");
+            Directory.CreateDirectory(tempDir);
+            var safeName = $"{Guid.NewGuid():N}.{extension}";
+            var localPath = Path.Combine(tempDir, safeName);
+            await File.WriteAllBytesAsync(localPath, fileBytes, ct);
+            return localPath;
         }
         catch
         {
