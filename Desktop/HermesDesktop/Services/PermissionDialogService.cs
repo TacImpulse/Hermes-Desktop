@@ -272,6 +272,28 @@ public sealed class PermissionDialogService
                     return formatted;
             }
 
+            if (string.Equals(toolName, "write_file", StringComparison.OrdinalIgnoreCase) &&
+                root.ValueKind == JsonValueKind.Object)
+            {
+                var summary = new System.Text.StringBuilder();
+
+                if (root.TryGetProperty("filePath", out var filePathProp) &&
+                    filePathProp.ValueKind == JsonValueKind.String)
+                {
+                    summary.AppendLine($"File: {filePathProp.GetString()}");
+                }
+
+                if (root.TryGetProperty("content", out var contentProp) &&
+                    contentProp.ValueKind == JsonValueKind.String)
+                {
+                    summary.AppendLine($"Content length: {contentProp.GetString()?.Length ?? 0} chars");
+                }
+
+                var formatted = summary.ToString().Trim();
+                if (!string.IsNullOrEmpty(formatted))
+                    return formatted;
+            }
+
             // Everything else: pretty-print the JSON for readability.
             return JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true });
         }
