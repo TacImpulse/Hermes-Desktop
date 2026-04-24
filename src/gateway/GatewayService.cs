@@ -24,6 +24,7 @@ public sealed class GatewayService
     private readonly ConcurrentDictionary<string, SessionEntry> _sessions = new();
     private readonly ConcurrentDictionary<string, DateTime> _activeAgents = new();
     private readonly ConcurrentDictionary<Platform, FailedPlatformInfo> _failedPlatforms = new();
+    private readonly ConcurrentDictionary<Platform, string> _lastChatIds = new();
 
     private Func<string, string, string, Task<string>>? _agentHandler;
     private bool _running;
@@ -112,6 +113,7 @@ public sealed class GatewayService
 
     private async Task<string?> HandleMessageAsync(MessageEvent evt, CancellationToken ct)
     {
+        _lastChatIds[evt.Source.Platform] = evt.Source.ChatId;
         var sessionKey = BuildSessionKey(evt.Source);
 
         // ── Authorization ──
@@ -232,6 +234,13 @@ public sealed class GatewayService
     /// <summary>Send a text message (convenience wrapper).</summary>
     public Task<DeliveryResult> SendTextAsync(Platform platform, string chatId, string text, CancellationToken ct) =>
         SendAsync(new OutboundMessage { Platform = platform, ChatId = chatId, Text = text }, ct);
+
+    /// <summary>
+    /// Try to get the last inbound chat for a platform.
+    /// Used for channel-native replies when the caller omits ChatId.
+    /// </summary>
+    public bool TryGetLastChatId(Platform platform, out string chatId) =>
+        _lastChatIds.TryGetValue(platform, out chatId!);
 
     // ══════════════════════════════════════════
     // Authorization (upstream: 6-tier)
@@ -410,6 +419,7 @@ public sealed class GatewayService
         _adapters.Clear();
         _sessions.Clear();
         _activeAgents.Clear();
+        _lastChatIds.Clear();
     }
 }
 

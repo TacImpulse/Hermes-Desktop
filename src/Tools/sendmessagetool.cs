@@ -44,15 +44,25 @@ public sealed class SendMessageTool : ITool
         if (string.IsNullOrWhiteSpace(p.Message))
             return ToolResult.Fail("Message is required.");
 
-        if (string.IsNullOrWhiteSpace(p.ChatId))
-            return ToolResult.Fail("ChatId is required.");
+        var chatId = p.ChatId;
+        if (string.IsNullOrWhiteSpace(chatId) && _gateway is not null && _gateway.IsRunning)
+        {
+            if (_gateway.TryGetLastChatId(platform, out var lastChatId))
+                chatId = lastChatId;
+        }
+
+        if (string.IsNullOrWhiteSpace(chatId))
+        {
+            return ToolResult.Fail(
+                $"ChatId is required for {p.Platform}. Reply in a connected {p.Platform} chat or pass ChatId explicitly.");
+        }
 
         // Route through gateway if available
         if (_gateway is not null && _gateway.IsRunning)
         {
-            var result = await _gateway.SendTextAsync(platform, p.ChatId, p.Message, ct);
+            var result = await _gateway.SendTextAsync(platform, chatId, p.Message, ct);
             return result.Success
-                ? ToolResult.Ok($"Message sent to {p.Platform} (chat {p.ChatId}): {p.Message.Length} chars. MessageId: {result.MessageId}")
+                ? ToolResult.Ok($"Message sent to {p.Platform} (chat {chatId}): {p.Message.Length} chars. MessageId: {result.MessageId}")
                 : ToolResult.Fail($"Delivery failed: {result.Error}");
         }
 
