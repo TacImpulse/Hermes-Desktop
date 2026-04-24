@@ -137,9 +137,15 @@ internal static class HermesEnvironment
         return pool;
     }
 
-    internal static bool TelegramConfigured => HasEnvironmentVariable("TELEGRAM_BOT_TOKEN");
+    internal static bool TelegramConfigured =>
+        HasEnvironmentVariable("TELEGRAM_BOT_TOKEN") ||
+        !string.IsNullOrWhiteSpace(ReadPlatformSetting("telegram", "token")) ||
+        !string.IsNullOrWhiteSpace(ReadIntegrationSetting("telegram_bot_token"));
 
-    internal static bool DiscordConfigured => HasEnvironmentVariable("DISCORD_BOT_TOKEN");
+    internal static bool DiscordConfigured =>
+        HasEnvironmentVariable("DISCORD_BOT_TOKEN") ||
+        !string.IsNullOrWhiteSpace(ReadPlatformSetting("discord", "token")) ||
+        !string.IsNullOrWhiteSpace(ReadIntegrationSetting("discord_bot_token"));
 
     internal static bool SlackConfigured =>
         HasEnvironmentVariable("SLACK_BOT_TOKEN") ||
