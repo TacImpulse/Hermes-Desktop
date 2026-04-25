@@ -1,10 +1,12 @@
 namespace Hermes.Agent.Gateway.Platforms;
 
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Hermes.Agent.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Collections.Concurrent;
 
 // ══════════════════════════════════════════════
 // Telegram Bot API Adapter
@@ -23,6 +25,7 @@ public sealed class TelegramAdapter : IPlatformAdapter
     private readonly string _token;
     private readonly HttpClient _http;
     private readonly ILogger<TelegramAdapter> _logger;
+    private readonly ConcurrentDictionary<string, DateTime> _recentOutboundFingerprints = new();
     private Func<MessageEvent, Task<string?>>? _messageHandler;
     private Action<Platform, Exception>? _errorHandler;
     private CancellationTokenSource? _pollCts;
@@ -76,6 +79,8 @@ public sealed class TelegramAdapter : IPlatformAdapter
     {
         try
         {
+            CleanupRecentOutboundFingerprints();
+
             // Chunk long messages (Telegram limit: 4096 chars)
             var text = message.Text;
             var chunks = ChunkText(text, 4096);
@@ -83,6 +88,13 @@ public sealed class TelegramAdapter : IPlatformAdapter
             string? lastMessageId = null;
             foreach (var chunk in chunks)
             {
+                var fingerprint = BuildOutboundFingerprint(message.ChatId, chunk, message.ReplyToMessageId);
+                if (!_recentOutboundFingerprints.TryAdd(fingerprint, DateTime.UtcNow))
+                {
+                    _logger.LogDebug("Skipping duplicate Telegram send to {ChatId}", message.ChatId);
+                    continue;
+                }
+
                 var payload = new
                 {
                     chat_id = message.ChatId,
@@ -253,6 +265,23 @@ public sealed class TelegramAdapter : IPlatformAdapter
         var root = doc.RootElement;
         description = root.TryGetProperty("description", out var descEl) ? descEl.GetString() : null;
         return root.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+    }
+
+    private static string BuildOutboundFingerprint(string chatId, string text, string? replyToMessageId)
+    {
+        var raw = $"{chatId}|{replyToMessageId ?? ""}|{text}";
+        var bytes = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
+        return Convert.ToHexString(bytes);
+    }
+
+    private void CleanupRecentOutboundFingerprints()
+    {
+        var cutoff = DateTime.UtcNow.AddSeconds(-10);
+        foreach (var (key, timestamp) in _recentOutboundFingerprints)
+        {
+            if (timestamp < cutoff)
+                _recentOutboundFingerprints.TryRemove(key, out _);
+        }
     }
 
     private static List<string> ChunkText(string text, int maxLength)
