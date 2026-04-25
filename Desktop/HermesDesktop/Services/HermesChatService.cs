@@ -28,6 +28,8 @@ internal sealed class HermesChatService : IDisposable
     private CancellationTokenSource? _streamCts;
     private bool _disposed;
 
+    public event Action<bool, string?>? ChatStateChanged;
+
     public HermesChatService(
         Agent agent,
         IChatClient chatClient,
@@ -76,6 +78,7 @@ internal sealed class HermesChatService : IDisposable
 
         try
         {
+            ChatStateChanged?.Invoke(true, "processing");
             var response = await _agent.ChatAsync(message, _currentSession, ct);
 
             // Persist all new messages (user + tool calls + assistant)
@@ -95,6 +98,10 @@ internal sealed class HermesChatService : IDisposable
             await PersistNewMessagesAsync(messageCountBefore);
             _logger.LogWarning(ex, "Chat send failed for session {SessionId}", _currentSession.Id);
             throw;
+        }
+        finally
+        {
+            ChatStateChanged?.Invoke(false, null);
         }
     }
 
@@ -119,6 +126,7 @@ internal sealed class HermesChatService : IDisposable
         var fullResponse = new System.Text.StringBuilder();
         try
         {
+            ChatStateChanged?.Invoke(true, "streaming");
             await foreach (var evt in _agent.StreamChatAsync(message, _currentSession!, _streamCts.Token))
             {
                 switch (evt)
@@ -160,6 +168,8 @@ internal sealed class HermesChatService : IDisposable
                 _currentSession.AddMessage(assistantMsg);
                 await _transcriptStore.SaveMessageAsync(_currentSession.Id, assistantMsg, CancellationToken.None);
             }
+
+            ChatStateChanged?.Invoke(false, null);
         }
     }
 

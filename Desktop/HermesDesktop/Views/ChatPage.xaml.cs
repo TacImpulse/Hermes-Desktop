@@ -55,6 +55,7 @@ public sealed partial class ChatPage : Page
     private bool _initialized;
     private bool _isBusy;
     private bool _isRecordingVoice;
+    private string? _turnStatusMessageId;
     private WaveInEvent? _voiceRecorder;
     private WaveFileWriter? _voiceWriter;
     private string? _voiceRecordingPath;
@@ -133,6 +134,8 @@ public sealed partial class ChatPage : Page
             }
         };
 
+        _chatService.ChatStateChanged += OnChatStateChanged;
+
         // Wire recording toggle
         ReplayPanelView.RecordingToggled += isRecording =>
         {
@@ -155,6 +158,36 @@ public sealed partial class ChatPage : Page
             AppendWelcomeMessage();
 
         await RefreshConnectionStatusAsync();
+    }
+
+    private void OnChatStateChanged(bool isBusy, string? detail)
+    {
+        if (DispatcherQueue is null)
+            return;
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (isBusy)
+            {
+                if (string.IsNullOrWhiteSpace(_turnStatusMessageId))
+                {
+                    _turnStatusMessageId = Guid.NewGuid().ToString("N");
+                    AppendSystemMessage($"Working on it{(string.IsNullOrWhiteSpace(detail) ? "" : $": {detail}")}");
+                }
+                else if (!string.IsNullOrWhiteSpace(detail))
+                {
+                    AppendSystemMessage($"Still working: {detail}");
+                }
+            }
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(_turnStatusMessageId))
+                {
+                    AppendSystemMessage("Done.");
+                    _turnStatusMessageId = null;
+                }
+            }
+        });
     }
 
     // ── Model Switcher ──
