@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -644,20 +645,13 @@ public sealed partial class ChatPage : Page
         try
         {
             var sttUrl = ReadVoiceSetting("stt_url", "http://127.0.0.1:8001/v1/audio/transcriptions");
-            using var http = CreateVoiceHttpClient();
-            using var form = new MultipartFormDataContent();
-            await using var stream = File.OpenRead(audioPath);
-            using var audio = new StreamContent(stream);
-            audio.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
-            form.Add(audio, "file", Path.GetFileName(audioPath));
-            form.Add(new StringContent(ReadVoiceSetting("stt_model", "Systran/faster-whisper-large-v3")), "model");
+            var transcript = await TryTranscribeViaHttpAsync(audioPath, sttUrl);
+            if (string.IsNullOrWhiteSpace(transcript))
+                transcript = await TryTranscribeViaLocalWhisperAsync(audioPath);
 
-            var response = await http.PostAsync(sttUrl, form);
-            var body = await response.Content.ReadAsStringAsync();
-            if (!response.IsSuccessStatusCode)
-                throw new InvalidOperationException($"{response.StatusCode}: {body}");
+            if (string.IsNullOrWhiteSpace(transcript))
+                throw new InvalidOperationException("No transcription text was returned.");
 
-            var transcript = ExtractTranscriptText(body);
             PromptTextBox.Text = transcript;
             PromptTextBox.Focus(FocusState.Programmatic);
             PromptTextBox.SelectionStart = PromptTextBox.Text.Length;
@@ -723,6 +717,66 @@ public sealed partial class ChatPage : Page
     {
         Timeout = TimeSpan.FromMinutes(3)
     };
+
+    private async Task<string?> TryTranscribeViaHttpAsync(string audioPath, string sttUrl)
+    {
+        try
+        {
+            using var http = CreateVoiceHttpClient();
+            using var form = new MultipartFormDataContent();
+            await using var stream = File.OpenRead(audioPath);
+            using var audio = new StreamContent(stream);
+            audio.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+            form.Add(audio, "file", Path.GetFileName(audioPath));
+            form.Add(new StringContent(ReadVoiceSetting("stt_model", "Systran/faster-whisper-large-v3")), "model");
+
+            var response = await http.PostAsync(sttUrl, form);
+            var body = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException($"{response.StatusCode}: {body}");
+
+            return ExtractTranscriptText(body);
+        }
+        catch (Exception ex)
+        {
+            AppendSystemMessage($"STT backend failed, trying local Whisper fallback: {ex.Message}");
+            return null;
+        }
+    }
+
+    private async Task<string?> TryTranscribeViaLocalWhisperAsync(string audioPath)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "whisper",
+                Arguments = $"\"{audioPath}\" --model base --output_format txt",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var process = new Process { StartInfo = psi };
+            if (!process.Start())
+                return null;
+
+            var stdout = await process.StandardOutput.ReadToEndAsync();
+            var stderr = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(stderr) ? $"Whisper exit code {process.ExitCode}" : stderr.Trim());
+
+            return string.IsNullOrWhiteSpace(stdout) ? null : stdout.Trim();
+        }
+        catch (Exception ex)
+        {
+            AppendSystemMessage($"Local Whisper fallback failed: {ex.Message}");
+            return null;
+        }
+    }
 
     private static string ReadVoiceSetting(string key, string fallback)
     {

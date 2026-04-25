@@ -547,8 +547,13 @@ public partial class App : Application
         services.AddSingleton(sp =>
         {
             var gatewayConfig = BuildGatewayConfig();
-            return new GatewayService(gatewayConfig, sp.GetRequiredService<ILogger<GatewayService>>());
+            return new GatewayService(
+                gatewayConfig,
+                sp.GetRequiredService<ILogger<GatewayService>>(),
+                sp.GetRequiredService<RemoteApprovalService>());
         });
+
+        services.AddSingleton(_ => new RemoteApprovalService());
 
         // Skill invoker (for slash command support)
         services.AddSingleton(sp => new Hermes.Agent.Skills.SkillInvoker(
@@ -674,8 +679,10 @@ public partial class App : Application
     private static void WirePermissionCallback(IServiceProvider services)
     {
         var agent = services.GetRequiredService<Hermes.Agent.Core.Agent>();
+        var gateway = services.GetRequiredService<GatewayService>();
         var permissionManager = services.GetRequiredService<PermissionManager>();
         var permissionStore = services.GetRequiredService<WorkspacePermissionRuleStore>();
+        var remoteApprovals = services.GetRequiredService<RemoteApprovalService>();
         // Resolve the dialog service once; it captures the active window's
         // DispatcherQueue and XamlRoot internally and is safe to reuse across
         // many permission prompts. PermissionDialogService is the dedicated
@@ -685,6 +692,18 @@ public partial class App : Application
         // dispatcher-shutdown deadlock guard.
         agent.PermissionPromptCallback = async (toolName, message, toolArguments) =>
         {
+            if (await TryApproveRemotelyAsync(
+                    gateway,
+                    remoteApprovals,
+                    permissionManager,
+                    permissionStore,
+                    toolName,
+                    message,
+                    toolArguments))
+            {
+                return true;
+            }
+
             if (App.Current is App app && app._window is not null)
             {
                 var dialogService = new HermesDesktop.Services.PermissionDialogService(
@@ -711,6 +730,88 @@ public partial class App : Application
             }
             return false;
         };
+    }
+
+    private static async Task<bool> TryApproveRemotelyAsync(
+        GatewayService gateway,
+        RemoteApprovalService remoteApprovals,
+        PermissionManager permissionManager,
+        WorkspacePermissionRuleStore permissionStore,
+        string toolName,
+        string message,
+        string? toolArguments)
+    {
+        try
+        {
+            if (!gateway.Adapters.ContainsKey(Platform.Telegram))
+                return false;
+
+            if (!gateway.TryGetLastChatId(Platform.Telegram, out var chatId) ||
+                string.IsNullOrWhiteSpace(chatId))
+                return false;
+
+            var request = remoteApprovals.CreateRequest(
+                Platform.Telegram,
+                chatId,
+                toolName,
+                message,
+                toolArguments);
+
+            var prompt = remoteApprovals.BuildPrompt(request);
+            var delivery = await gateway.SendTextAsync(
+                Platform.Telegram,
+                chatId,
+                prompt,
+                CancellationToken.None);
+
+            if (!delivery.Success)
+            {
+                remoteApprovals.Remove(request.Id);
+                return false;
+            }
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            try
+            {
+                var decision = await request.DecisionTask.WaitAsync(timeoutCts.Token);
+                return decision switch
+                {
+                    RemoteApprovalDecision.AlwaysAllowTool => PersistAndAllow(permissionManager, permissionStore, toolName),
+                    RemoteApprovalDecision.AllowOnce => true,
+                    _ => false
+                };
+            }
+            finally
+            {
+                remoteApprovals.Remove(request.Id);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            BestEffort.LogFailure(TryGetAppLogger(), ex, "processing remote Telegram approval");
+            return false;
+        }
+    }
+
+    private static bool PersistAndAllow(
+        PermissionManager permissionManager,
+        WorkspacePermissionRuleStore permissionStore,
+        string toolName)
+    {
+        if (permissionManager.AddAlwaysAllowRule(toolName))
+        {
+            permissionStore.SaveAlwaysAllowRules(permissionManager.GetAlwaysAllowRulesSnapshot());
+        }
+
+        return true;
     }
 
     /// <summary>

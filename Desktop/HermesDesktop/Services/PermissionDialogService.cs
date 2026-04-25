@@ -111,6 +111,7 @@ public sealed class PermissionDialogService
             try
             {
                 var dialog = BuildDialog(message, toolName, toolArguments);
+                BringWindowForward();
                 var result = await dialog.ShowAsync();
                 var decision = result switch
                 {
@@ -209,6 +210,21 @@ public sealed class PermissionDialogService
         };
     }
 
+    private void BringWindowForward()
+    {
+        try
+        {
+            _window.Activate();
+        }
+        catch (Exception ex)
+        {
+            if (_logger is not null)
+                _logger.LogDebug(ex, "Failed to activate permission window");
+            else
+                Debug.WriteLine($"Failed to activate permission window: {ex}");
+        }
+    }
+
     /// <summary>
     /// Format raw tool arguments for display in the permission dialog. For
     /// the bash tool, parse the JSON and surface the literal command string
@@ -287,6 +303,36 @@ public sealed class PermissionDialogService
                     contentProp.ValueKind == JsonValueKind.String)
                 {
                     summary.AppendLine($"Content length: {contentProp.GetString()?.Length ?? 0} chars");
+                }
+
+                var formatted = summary.ToString().Trim();
+                if (!string.IsNullOrEmpty(formatted))
+                    return formatted;
+            }
+
+            if (string.Equals(toolName, "code_sandbox", StringComparison.OrdinalIgnoreCase) &&
+                root.ValueKind == JsonValueKind.Object)
+            {
+                var summary = new System.Text.StringBuilder();
+
+                if (root.TryGetProperty("command", out var sandboxCommandProp) &&
+                    sandboxCommandProp.ValueKind == JsonValueKind.String)
+                {
+                    summary.AppendLine("Sandbox command:");
+                    summary.AppendLine(sandboxCommandProp.GetString());
+                }
+
+                if (root.TryGetProperty("prompt", out var promptProp) &&
+                    promptProp.ValueKind == JsonValueKind.String)
+                {
+                    summary.AppendLine("Prompt:");
+                    summary.AppendLine(promptProp.GetString());
+                }
+
+                if (root.TryGetProperty("language", out var languageProp) &&
+                    languageProp.ValueKind == JsonValueKind.String)
+                {
+                    summary.AppendLine($"Language: {languageProp.GetString()}");
                 }
 
                 var formatted = summary.ToString().Trim();

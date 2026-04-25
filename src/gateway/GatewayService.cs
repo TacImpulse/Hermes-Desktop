@@ -25,14 +25,16 @@ public sealed class GatewayService
     private readonly ConcurrentDictionary<string, DateTime> _activeAgents = new();
     private readonly ConcurrentDictionary<Platform, FailedPlatformInfo> _failedPlatforms = new();
     private readonly ConcurrentDictionary<Platform, string> _lastChatIds = new();
+    private readonly RemoteApprovalService _remoteApprovals;
 
     private Func<string, string, string, Task<string>>? _agentHandler;
     private bool _running;
 
-    public GatewayService(GatewayConfig config, ILogger<GatewayService> logger)
+    public GatewayService(GatewayConfig config, ILogger<GatewayService> logger, RemoteApprovalService remoteApprovals)
     {
         _config = config;
         _logger = logger;
+        _remoteApprovals = remoteApprovals;
     }
 
     /// <summary>Connected adapters.</summary>
@@ -115,6 +117,9 @@ public sealed class GatewayService
     {
         _lastChatIds[evt.Source.Platform] = evt.Source.ChatId;
         var sessionKey = BuildSessionKey(evt.Source);
+
+        if (_remoteApprovals.TryCompleteFromMessage(evt, out var approvalResponse))
+            return approvalResponse;
 
         // ── Authorization ──
         if (!IsUserAuthorized(evt.Source))
